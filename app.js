@@ -115,12 +115,20 @@ function videoMarkup(raw) {
     if(admin) $("accountLabel").textContent=(currentUser.email||"Admin")+" · Admin";
     await loadFavorites(); renderAdminMovies();
   }
-  function openPlayer(id) {
-    const m=allMovies.find(x=>String(x.id)===String(id)); if(!m)return;
-    $("playerTitle").textContent=m.title; $("playerDescription").textContent=m.description||"";
-    $("playerFrame").innerHTML=videoMarkup(m.video_url);
-    $("playerDialog").showModal();
-  }
+  
+function openPlayer(id) {
+  const m = allMovies.find(x => String(x.id) === String(id));
+  if (!m) return;
+
+  $("playerTitle").textContent = m.title;
+  $("playerDescription").textContent = m.description || "";
+  $("playerFrame").innerHTML = videoMarkup(m.video_url);
+
+  $("playerDialog").showModal();
+
+  // Muat daftar episode untuk serial yang dipilih
+  loadEpisodes(m.id);
+}
   function renderAdminMovies() {
     if(!admin){$("adminMovieList").innerHTML="";return;}
     $("adminMovieList").innerHTML=allMovies.length?allMovies.map(m=>`<div class="admin-item"><img class="admin-thumb" src="${esc(safeUrl(m.poster_url)||"")}" alt="" onerror="this.style.visibility='hidden'"><div class="admin-item-main"><strong>${esc(m.title)}</strong><small>${esc(m.category||"Tokusatsu")} ${m.release_year?"· "+esc(m.release_year):""}</small></div><div class="admin-item-actions"><button class="button button-ghost" data-edit="${esc(m.id)}">Edit</button><button class="button button-ghost" data-delete="${esc(m.id)}">Hapus</button></div></div>`).join(""):'<div class="empty-state">Belum ada film.</div>';
