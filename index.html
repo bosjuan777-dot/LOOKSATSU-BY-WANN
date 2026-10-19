@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10111b">
+  <title>LOOKSATSU — Tokusatsu Streaming</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script defer src="app.js"></script>
+
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark">L</span><span>LOOK<span class="accent">SATSU</span><small>TOKUSATSU UNIVERSE</small></span></a>
+    <nav><a href="#katalog">Katalog</a><a href="#favorit">Favorit</a></nav>
+    <div class="account">
+      <span id="accountLabel" class="muted">Mode pengunjung</span>
+      <button id="loginOpen" class="button button-ghost">Masuk</button>
+      <button id="logoutBtn" class="button button-ghost hidden">Keluar</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">TRANSFORMASI DIMULAI DI SINI</p>
+        <h1>Masuki dunia<br><span class="accent">Tokusatsu.</span></h1>
+        <p class="hero-text">Temukan serial pahlawan, monster, dan pertarungan epik dalam satu katalog.</p>
+        <a href="#katalog" class="button button-primary">Jelajahi katalog <span>↘</span></a>
+        <p class="small muted" id="connectionStatus">Menghubungkan layanan…</p>
+      </div>
+      <div class="hero-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="hero-core">特撮</div><span class="spark spark-a">✦</span><span class="spark spark-b">✧</span></div>
+    </section>
+
+    <section class="section" id="katalog">
+      <div class="section-heading"><div><p class="eyebrow">PILIH PETUALANGANMU</p><h2>Katalog film</h2></div><span class="count" id="filmCount">0 judul</span></div>
+      <div class="search-row"><label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="Cari judul, kategori, atau tahun…"></label><select id="categoryFilter" aria-label="Filter kategori"><option value="">Semua kategori</option></select></div>
+      <div id="movieGrid" class="movie-grid"><div class="empty-state">Sedang memuat katalog…</div></div>
+    </section>
+
+    <section class="section favorite-section" id="favorit">
+      <div class="section-heading"><div><p class="eyebrow">SIMPAN UNTUK NANTI</p><h2>Favorit saya</h2></div></div>
+      <div id="favoriteGrid" class="movie-grid"><div class="empty-state">Masuk untuk menyimpan favorit di akunmu.</div></div>
+    </section>
+
+    <section id="adminPanel" class="section admin-section hidden">
+      <div class="section-heading"><div><p class="eyebrow">PUSAT KENDALI</p><h2>Admin LOOKSATSU</h2></div><span class="admin-pill">ADMIN</span></div>
+      <div class="admin-tabs"><button class="tab active" data-tab="filmsTab">Kelola film</button><button class="tab" data-tab="usersTab">Cari pengguna</button></div>
+      <div id="filmsTab" class="tab-content">
+        <form id="movieForm" class="admin-form">
+          <input type="hidden" id="movieId">
+          <div class="form-title"><h3 id="movieFormTitle">Tambah film</h3><span class="small muted">Isi tautan yang legal untuk dibagikan.</span></div>
+          <div class="form-grid">
+            <label>Judul film *<input id="movieTitle" required maxlength="180" placeholder="Contoh: Ultraman Tiga"></label>
+            <label>Kategori<input id="movieCategory" maxlength="80" value="Tokusatsu" placeholder="Tokusatsu, Kamen Rider…"></label>
+            <label>Tahun rilis<input id="movieYear" type="number" min="1900" max="2100" placeholder="2026"></label>
+            <label>URL poster<input id="moviePoster" type="url" placeholder="https://…"></label>
+            <label class="wide">URL video/embed *<input id="movieVideo" type="url" required placeholder="https://…"></label>
+            <label class="wide">Deskripsi<textarea id="movieDescription" rows="3" maxlength="3000" placeholder="Ringkasan film…"></textarea></label>
+          </div>
+          <div class="form-actions"><button class="button button-primary" type="submit">Simpan film</button><button class="button button-ghost" id="cancelEdit" type="button">Batal</button><span id="adminMessage" class="small muted"></span></div>
+        </form>
+        <div class="admin-list-wrap"><h3>Film tersimpan</h3><div id="adminMovieList" class="admin-list"></div></div>
+      </div>
+      <div id="usersTab" class="tab-content hidden">
+        <p class="muted small">Pencarian hanya menampilkan profil publik minimal yang disimpan aplikasi. Jangan menyimpan password atau data sensitif di tabel profil.</p>
+        <form id="userSearchForm" class="search-row"><label class="search-box"><span>⌕</span><input id="userSearch" type="search" placeholder="Cari nama tampilan atau email…"></label><button class="button button-primary">Cari</button></form>
+        <div id="userResults" class="admin-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer><a class="brand footer-brand" href="./"><span class="brand-mark">L</span><span>LOOK<span class="accent">SATSU</span></span></a><p>Gunakan tautan video yang kamu miliki hak untuk ditayangkan. LOOKSATSU tidak menyertakan film berhak cipta.</p><span>© <span id="yearNow"></span> LOOKSATSU</span></footer>
+
+  <dialog id="loginDialog" class="dialog">
+    <form id="loginForm" class="dialog-card">
+      <button type="button" class="dialog-close" id="loginClose" aria-label="Tutup">×</button>
+      <p class="eyebrow">AKUN LOOKSATSU</p><h2 id="authTitle">Masuk</h2><p class="muted small">Gunakan email dan password akun Supabase kamu.</p>
+      <label>Email<input id="authEmail" type="email" required autocomplete="email" placeholder="nama@email.com"></label>
+      <label>Password<input id="authPassword" type="password" required minlength="8" autocomplete="current-password" placeholder="Minimal 8 karakter"></label>
+      <label id="displayNameWrap" class="hidden">Nama tampilan<input id="displayName" maxlength="60" placeholder="Nama panggilan"></label>
+      <button class="button button-primary full" id="authSubmit" type="submit">Masuk</button>
+      <button class="text-button" id="authToggle" type="button">Belum punya akun? Daftar</button>
+      <p id="authMessage" class="small" role="status"></p>
+    </form>
+  </dialog>
+
+  <dialog id="playerDialog" class="dialog player-dialog">
+    <div class="player-card"><button type="button" class="dialog-close" id="playerClose" aria-label="Tutup">×</button><div id="playerFrame" class="player-frame"></div><div class="player-info"><p class="eyebrow">SEDANG DIPUTAR</p><h2 id="playerTitle"></h2><p id="playerDescription" class="muted"></p></div></div>
+  </dialog>
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>
