@@ -14,17 +14,50 @@
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   function toast(msg) { const el=$("toast"); el.textContent=msg; el.classList.add("show"); setTimeout(()=>el.classList.remove("show"),2800); }
   function safeUrl(raw) { try { const u=new URL(raw); return ["https:","http:"].includes(u.protocol) ? u.href : ""; } catch { return ""; } }
-  function videoMarkup(raw) {
-    const url=safeUrl(raw); if(!url) return '<p class="muted">Tautan video tidak valid.</p>';
-    const host=new URL(url).hostname.toLowerCase();
-    if (host==="youtube.com" || host.endsWith(".youtube.com") || host==="youtu.be" || host==="www.youtube-nocookie.com") {
-      let id="";
-      if(host==="youtu.be") id=new URL(url).pathname.slice(1);
-      else if(new URL(url).pathname.startsWith("/embed/")) id=new URL(url).pathname.split("/")[2];
-      else id=new URL(url).searchParams.get("v") || "";
-      if(!/^[\w-]{6,20}$/.test(id)) return `<a class="button button-primary" target="_blank" rel="noopener noreferrer" href="${esc(url)}">Buka video</a>`;
-      return `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}" title="Pemutar video" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`;
+  
+function videoMarkup(raw) {
+  const url = safeUrl(raw);
+  if (!url) return '<p class="muted">Tautan video tidak valid.</p>';
+
+  const u = new URL(url);
+  const host = u.hostname.toLowerCase();
+
+  // Pemutar YouTube
+  if (
+    ["youtube.com", "www.youtube.com", "m.youtube.com",
+     "youtu.be", "www.youtube-nocookie.com"].includes(host) ||
+    host.endsWith(".youtube.com")
+  ) {
+    let id = "";
+
+    if (host === "youtu.be") {
+      id = u.pathname.split("/")[1] || "";
+    } else if (u.pathname.startsWith("/embed/")) {
+      id = u.pathname.split("/")[2] || "";
+    } else {
+      id = u.searchParams.get("v") || "";
     }
+
+    if (/^[\w-]{11}$/.test(id)) {
+      return `<iframe
+        src="https://www.youtube-nocookie.com/embed/${id}"
+        title="Video LOOKSATSU"
+        allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
+        allowfullscreen></iframe>`;
+    }
+  }
+
+  // Pemutar video langsung
+  if (/\.(mp4|webm|ogg)(\?.*)?$/i.test(u.pathname + u.search)) {
+    return `<video controls playsinline preload="metadata" style="width:100%;height:100%;background:#000">
+      <source src="${esc(url)}">
+      Browser tidak mendukung format video ini.
+    </video>`;
+  }
+
+  return '<p class="muted">Link ini tidak mendukung pemutar langsung. Gunakan URL MP4 atau link embed resmi.</p>';
+}
+
     // Non-YouTube links are opened in a new tab rather than embedded blindly.
     return `<div class="empty-state"><p>Video ini menggunakan penyedia eksternal.</p><a class="button button-primary" target="_blank" rel="noopener noreferrer" href="${esc(url)}">Buka video di tab baru</a></div>`;
   }
@@ -157,3 +190,108 @@
   }
   document.addEventListener("DOMContentLoaded",init);
 })();
+let currentEpisodes = [];
+let currentEpisodeIndex = 0;
+let currentMovieId = null;
+
+async function loadEpisodes(movieId) {
+  currentMovieId = movieId;
+  currentEpisodes = [];
+  currentEpisodeIndex = 0;
+
+  const frame = $("playerFrame");
+  let list = $("episodeList");
+
+  // Buat daftar episode tanpa mengubah HTML
+  if (!list) {
+    list = document.createElement("div");
+    list.id = "episodeList";
+    list.style.cssText = "margin-top:16px;display:grid;gap:8px;";
+    frame.insertAdjacentElement("afterend", list);
+  }
+
+  list.innerHTML = "<p>Memuat episode...</p>";
+
+  const { data, error } = await sb
+    .from("episodes")
+    .select("id,movie_id,episode_number,title,video_url")
+    .eq("movie_id", movieId)
+    .order("episode_number", { ascending: true });
+
+  if (error) {
+    console.error("Episode:", error);
+    list.innerHTML =
+      '<p class="muted">Episode belum tersedia. Pastikan tabel episodes sudah dibuat di Supabase.</p>';
+    return;
+  }
+
+  currentEpisodes = data || [];
+
+  if (!currentEpisodes.length) {
+    list.innerHTML =
+      '<p class="muted">Belum ada episode untuk serial ini.</p>';
+    return;
+  }
+
+  list.innerHTML = `
+    <h3>Daftar Episode</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${currentEpisodes.map((ep, i) => `
+        <button class="button button-ghost"
+          data-episode-index="${i}">
+          Episode ${esc(ep.episode_number)} — ${esc(ep.title)}
+        </button>
+      `).join("")}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="button button-ghost" id="episodePrev">← Sebelumnya</button>
+      <button class="button button-primary" id="episodeNext">Selanjutnya →</button>
+    </div>
+  `;
+
+  list.querySelectorAll("[data-episode-index]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      playEpisode(Number(btn.dataset.episodeIndex));
+    });
+  });
+
+  $("episodePrev").addEventListener("click", () => {
+    if (currentEpisodeIndex > 0) {
+      playEpisode(currentEpisodeIndex - 1);
+    }
+  });
+
+  $("episodeNext").addEventListener("click", () => {
+    if (currentEpisodeIndex < currentEpisodes.length - 1) {
+      playEpisode(currentEpisodeIndex + 1);
+    }
+  });
+
+  playEpisode(0);
+}
+
+function playEpisode(index) {
+  if (index < 0 || index >= currentEpisodes.length) return;
+
+  currentEpisodeIndex = index;
+  const ep = currentEpisodes[index];
+
+  $("playerTitle").textContent =
+    `Episode ${ep.episode_number}: ${ep.title}`;
+
+  $("playerFrame").innerHTML = videoMarkup(ep.video_url);
+
+  const list = $("episodeList");
+  if (list) {
+    list.querySelectorAll("[data-episode-index]").forEach((btn, i) => {
+      btn.classList.toggle("active", i === index);
+    });
+  }
+
+  const prev = $("episodePrev");
+  const next = $("episodeNext");
+
+  if (prev) prev.disabled = index === 0;
+  if (next) next.disabled = index === currentEpisodes.length - 1;
+      }
+      
