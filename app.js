@@ -1,990 +1,1026 @@
 
-(() => {
-  "use strict";
+"use strict";
 
-  const $ = (id) => document.getElementById(id);
+// ==========================================
+// LOOKSATSU - APLIKASI UTAMA
+// Memerlukan config.js dan Supabase JS v2
+// ==========================================
 
-  const config = window.LOOKSATSU_CONFIG || {};
-  const supabaseLib = window.supabase;
+const db = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY
+);
 
-  let sb = null;
-  let signupMode = false;
-  let currentUser = null;
-  let currentEpisodes = [];
-  let currentMovie = null;
-  let movies = [];
-  let favorites = new Set();
-  let isAdmin = false;
+const $ = (id) => document.getElementById(id);
 
-  // =========================
-  // INISIALISASI SUPABASE
-  // =========================
+let movies = [];
+let episodes = [];
+let favorites = new Set();
+let currentUser = null;
+let isAdmin = false;
+let isRegister = false;
+let currentMovie = null;
+let announcement = null;
+let toastTimer;
 
-  if (
-    supabaseLib &&
-    config.SUPABASE_URL &&
-    config.SUPABASE_ANON_KEY
-  ) {
-    sb = supabaseLib.createClient(
-      config.SUPABASE_URL,
-      config.SUPABASE_ANON_KEY
-    );
+// ==========================================
+// UTILITAS
+// ==========================================
+
+function escapeHTML(value = "") {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function notify(message) {
+  const toast = $("toast");
+  toast.textContent = message;
+  toast.classList.add("show");
+
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 3000);
+}
+
+function showMessage(id, message) {
+  const element = $(id);
+  if (element) element.textContent = message;
+}
+
+function openDialog(id) {
+  const dialog = $(id);
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+function closeDialog(id) {
+  const dialog = $(id);
+  if (dialog?.open) dialog.close();
+}
+
+function validURL(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function setConnection(message) {
+  showMessage("connectionStatus", message);
+}
+
+// ==========================================
+// AUTHENTICATION
+// ==========================================
+
+async function refreshAccount() {
+  const { data, error } = await db.auth.getUser();
+
+  if (error) console.warn("Status akun:", error.message);
+
+  currentUser = data?.user || null;
+  isAdmin = false;
+
+  if (currentUser) {
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("role, display_name")
+      .eq("id", currentUser.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.warn("Profil tidak tersedia:", profileError.message);
+    }
+
+    isAdmin = profile?.role === "admin";
+
+    $("accountLabel").textContent =
+      profile?.display_name || currentUser.email || "Pengguna";
+
+    $("loginOpen").classList.add("hidden");
+    $("logoutBtn").classList.remove("hidden");
+  } else {
+    $("accountLabel").textContent = "Mode pengunjung";
+    $("loginOpen").classList.remove("hidden");
+    $("logoutBtn").classList.add("hidden");
   }
 
-  function toast(message) {
-    const el = $("toast");
+  $("adminPanel").classList.toggle("hidden", !isAdmin);
 
-    if (el) {
-      el.textContent = message;
-      el.hidden = false;
+  await loadFavorites();
+}
 
-      setTimeout(() => {
-        el.hidden = true;
-      }, 3000);
-    } else {
-      alert(message);
-    }
-  }
+$("loginOpen").addEventListener("click", () => {
+  isRegister = false;
+  updateAuthMode();
+  openDialog("loginDialog");
+});
 
-  function setMessage(id, message) {
-    const el = $(id);
-    if (el) el.textContent = message;
-  }
+$("loginClose").addEventListener("click", () => {
+  closeDialog("loginDialog");
+});
 
-  function escapeHTML(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    })[char]);
-  }
+$("authToggle").addEventListener("click", () => {
+  isRegister = !isRegister;
+  updateAuthMode();
+});
 
-  function setStatus(message) {
-    const el = $("connectionStatus");
-    if (el) el.textContent = message;
-  }
+function updateAuthMode() {
+  $("authTitle").textContent = isRegister ? "Daftar akun" : "Masuk";
 
-  // =========================
-  // LOGIN DAN DAFTAR
-  // =========================
+  $("authSubmit").textContent = isRegister
+    ? "Buat akun"
+    : "Masuk";
 
-  function setAuthMode(isSignup) {
-    signupMode = isSignup;
+  $("authToggle").textContent = isRegister
+    ? "Sudah punya akun? Masuk"
+    : "Belum punya akun? Daftar";
 
-    if ($("authTitle")) {
-      $("authTitle").textContent =
-        signupMode ? "Daftar Akun" : "Login LOOKSATSU";
-    }
+  $("displayNameWrap").classList.toggle("hidden", !isRegister);
 
-    if ($("authSubmit")) {
-      $("authSubmit").textContent =
-        signupMode ? "Daftar" : "Login";
-    }
+  $("authPassword").autocomplete = isRegister
+    ? "new-password"
+    : "current-password";
 
-    if ($("displayNameWrap")) {
-      $("displayNameWrap").hidden = !signupMode;
-    }
+  $("authPassword").minLength = isRegister ? 8 : 1;
+}
 
-    if ($("authToggle")) {
-      $("authToggle").textContent =
-        signupMode
-          ? "Sudah punya akun? Login"
-          : "Belum punya akun? Daftar";
-    }
+$("loginForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
 
-    setMessage("authMessage", "");
-  }
+  const email = $("authEmail").value.trim();
+  const password = $("authPassword").value;
+  const displayName = $("displayName").value.trim();
 
-  async function authSubmit(event) {
-    event.preventDefault();
+  $("authSubmit").disabled = true;
+  showMessage("authMessage", "Memproses...");
 
-    if (!sb) {
-      setMessage(
-        "authMessage",
-        "Supabase belum terhubung. Periksa config.js."
-      );
-      return;
-    }
+  try {
+    let result;
 
-    const email = $("authEmail")?.value.trim();
-    const password = $("authPassword")?.value;
-    const displayName = $("displayName")?.value.trim();
-
-    if (!email || !password) {
-      setMessage("authMessage", "Isi email dan password.");
-      return;
-    }
-
-    if (signupMode && password.length < 6) {
-      setMessage(
-        "authMessage",
-        "Password minimal 6 karakter."
-      );
-      return;
-    }
-
-    const submitButton = $("authSubmit");
-    if (submitButton) submitButton.disabled = true;
-
-    setMessage("authMessage", "Memproses...");
-
-    try {
-      let result;
-
-      if (signupMode) {
-        result = await sb.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              display_name: displayName || ""
-            }
-          }
-        });
-      } else {
-        result = await sb.auth.signInWithPassword({
-          email,
-          password
-        });
-      }
-
-      if (result.error) throw result.error;
-
-      if (
-        signupMode &&
-        !result.data.session
-      ) {
-        setMessage(
-          "authMessage",
-          "Pendaftaran berhasil. Periksa email untuk verifikasi."
-        );
-        return;
-      }
-
-      setMessage("authMessage", "Berhasil!");
-      $("loginDialog")?.close();
-      $("loginForm")?.reset();
-
-      await refreshAuth(result.data.session);
-      toast(signupMode ? "Akun berhasil dibuat." : "Login berhasil.");
-    } catch (error) {
-      setMessage(
-        "authMessage",
-        error.message || "Login gagal."
-      );
-    } finally {
-      if (submitButton) submitButton.disabled = false;
-    }
-  }
-
-  async function logout() {
-    if (!sb) {
-      toast("Supabase belum terhubung.");
-      return;
-    }
-
-    const { error } = await sb.auth.signOut();
-
-    if (error) {
-      toast("Gagal logout: " + error.message);
-      return;
-    }
-
-    toast("Kamu sudah logout.");
-    await refreshAuth(null);
-  }
-
-  async function refreshAuth(session) {
-    currentUser = session?.user || null;
-
-    if ($("accountLabel")) {
-      $("accountLabel").textContent = currentUser
-        ? currentUser.email
-        : "Pengunjung";
-    }
-
-    if ($("loginOpen")) {
-      $("loginOpen").hidden = !!currentUser;
-    }
-
-    if ($("logoutBtn")) {
-      $("logoutBtn").hidden = !currentUser;
-    }
-
-    isAdmin = false;
-
-    // Hak admin harus diverifikasi lewat database.
-    if (currentUser && sb) {
-      try {
-        const { data, error } = await sb
-          .from("profiles")
-          .select("role")
-          .eq("id", currentUser.id)
-          .maybeSingle();
-
-        if (!error && data?.role === "admin") {
-          isAdmin = true;
+    if (isRegister) {
+      result = await db.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { display_name: displayName }
         }
-      } catch (error) {
-        console.error("Pemeriksaan admin gagal:", error);
+      });
+
+      if (!result.error && result.data.user) {
+        if (result.data.session) {
+          notify("Akun berhasil dibuat.");
+        } else {
+          showMessage(
+            "authMessage",
+            "Periksa email untuk verifikasi akun."
+          );
+          return;
+        }
       }
-    }
-
-    if ($("adminPanel")) {
-      $("adminPanel").hidden = !isAdmin;
-    }
-
-    if (currentUser) {
-      await loadFavorites();
     } else {
-      favorites.clear();
-      renderFavorites();
+      result = await db.auth.signInWithPassword({
+        email,
+        password
+      });
     }
 
+    if (result.error) throw result.error;
+
+    await refreshAccount();
     await loadMovies();
+    await loadAnnouncement();
+
+    closeDialog("loginDialog");
+    $("loginForm").reset();
+    notify(isRegister ? "Pendaftaran berhasil." : "Berhasil masuk.");
+  } catch (error) {
+    showMessage("authMessage", error.message || "Terjadi kesalahan.");
+  } finally {
+    $("authSubmit").disabled = false;
+  }
+});
+
+$("logoutBtn").addEventListener("click", async () => {
+  const { error } = await db.auth.signOut();
+
+  if (error) {
+    notify("Gagal keluar: " + error.message);
+    return;
   }
 
-  // =========================
-  // FILM
-  // =========================
+  await refreshAccount();
+  await loadMovies();
+  notify("Kamu sudah keluar.");
+});
 
-  async function loadMovies() {
-    if (!sb) {
-      setStatus("Supabase belum terhubung.");
-      renderMovies();
-      return;
-    }
+db.auth.onAuthStateChange((event) => {
+  if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+    setTimeout(async () => {
+      await refreshAccount();
+      await loadMovies();
+    }, 0);
+  }
+});
 
-    setStatus("Memuat film...");
+// ==========================================
+// KATALOG DAN PENCARIAN
+// ==========================================
 
-    const { data, error } = await sb
-      .from("movies")
-      .select("*")
-      .order("created_at", { ascending: false });
+async function loadMovies() {
+  $("movieGrid").innerHTML =
+    '<div class="empty-state">Memuat katalog...</div>';
 
-    if (error) {
-      console.error("Gagal memuat film:", error);
-      setStatus("Gagal memuat film. Periksa tabel dan izin akses.");
-      movies = [];
-      renderMovies();
-      return;
-    }
+  const { data, error } = await db
+    .from("movies")
+    .select("*")
+    .order("created_at", { ascending: false });
 
-    movies = data || [];
-    setStatus("Terhubung ke Supabase.");
-    renderMovies();
+  if (error) {
+    $("movieGrid").innerHTML =
+      '<div class="empty-state">Katalog gagal dimuat.</div>';
+
+    setConnection("Gagal terhubung ke katalog.");
+    console.error(error);
+    return;
   }
 
-  function renderMovies() {
-    const grid = $("movieGrid");
-    if (!grid) return;
+  movies = data || [];
+  renderMovies();
+  populateMovieSelect();
+  renderAdminMovies();
 
-    const query = ($("searchInput")?.value || "")
-      .trim()
-      .toLowerCase();
+  setConnection("Katalog berhasil dimuat.");
+}
 
-    const category = $("categoryFilter")?.value || "";
+function renderMovies() {
+  const query = $("searchInput").value.trim().toLowerCase();
+  const category = $("categoryFilter").value;
 
-    const filtered = movies.filter((movie) => {
-      const text = [
-        movie.title,
-        movie.description,
-        movie.category
-      ].join(" ").toLowerCase();
+  const filtered = movies.filter((movie) => {
+    const searchable = [
+      movie.title,
+      movie.category,
+      movie.year,
+      movie.description
+    ].join(" ").toLowerCase();
 
-      return (
-        text.includes(query) &&
-        (!category || movie.category === category)
-      );
-    });
+    return searchable.includes(query) &&
+      (!category || movie.category === category);
+  });
 
-    grid.innerHTML = filtered.length
-      ? filtered.map((movie) => `
-          <article class="movie-card">
-            <img
-              src="${escapeHTML(movie.poster_url || "")}"
-              alt="${escapeHTML(movie.title)}"
-              loading="lazy"
-            >
-            <h3>${escapeHTML(movie.title)}</h3>
-            <p>${escapeHTML(movie.category || "Lainnya")} ·
-               ${escapeHTML(movie.year || "-")}</p>
-            <button type="button"
-              data-action="watch"
-              data-id="${escapeHTML(movie.id)}">
-              Lihat Episode
-            </button>
-            <button type="button"
-              data-action="favorite"
-              data-id="${escapeHTML(movie.id)}">
-              ${favorites.has(String(movie.id)) ? "★ Favorit" : "☆ Favorit"}
-            </button>
-          </article>
-        `).join("")
-      : "<p>Film tidak ditemukan.</p>";
+  $("filmCount").textContent = `${filtered.length} judul`;
 
-    if ($("filmCount")) {
-      $("filmCount").textContent =
-        `${filtered.length} film`;
-    }
+  const categories = [...new Set(
+    movies.map((m) => m.category).filter(Boolean)
+  )].sort();
+
+  const previousCategory = $("categoryFilter").value;
+
+  $("categoryFilter").innerHTML =
+    '<option value="">Semua kategori</option>' +
+    categories.map((cat) =>
+      `<option value="${escapeHTML(cat)}">${escapeHTML(cat)}</option>`
+    ).join("");
+
+  if (categories.includes(previousCategory)) {
+    $("categoryFilter").value = previousCategory;
   }
 
-  // =========================
-  // FAVORIT
-  // =========================
+  if (!filtered.length) {
+    $("movieGrid").innerHTML =
+      '<div class="empty-state">Film tidak ditemukan.</div>';
+    return;
+  }
 
-  async function loadFavorites() {
-    favorites.clear();
+  $("movieGrid").innerHTML = filtered.map((movie) => `
+    <article class="movie-card">
+      <button class="movie-poster"
+        type="button"
+        data-play="${escapeHTML(movie.id)}"
+        aria-label="Putar ${escapeHTML(movie.title)}">
+        ${
+          validURL(movie.poster_url || "")
+            ? `<img src="${escapeHTML(movie.poster_url)}"
+                alt="Poster ${escapeHTML(movie.title)}"
+                loading="lazy">`
+            : '<span class="poster-placeholder">特撮</span>'
+        }
+      </button>
 
-    if (!sb || !currentUser) {
-      renderFavorites();
-      return;
-    }
+      <div class="movie-details">
+        <p class="eyebrow">${escapeHTML(movie.category || "Tokusatsu")}</p>
+        <h3>${escapeHTML(movie.title)}</h3>
+        <p class="muted small">${escapeHTML(movie.year || "Tahun tidak diketahui")}</p>
 
-    const { data, error } = await sb
+        <div class="movie-actions">
+          <button class="button button-primary"
+            type="button" data-play="${escapeHTML(movie.id)}">
+            Tonton
+          </button>
+
+          <button class="button button-ghost"
+            type="button" data-favorite="${escapeHTML(movie.id)}">
+            ${favorites.has(String(movie.id)) ? "♥ Favorit" : "♡ Favorit"}
+          </button>
+        </div>
+      </div>
+    </article>
+  `).join("");
+}
+
+$("searchInput").addEventListener("input", renderMovies);
+$("categoryFilter").addEventListener("change", renderMovies);
+
+// ==========================================
+// FAVORIT
+// ==========================================
+
+async function loadFavorites() {
+  favorites.clear();
+
+  if (currentUser) {
+    const { data, error } = await db
       .from("favorites")
       .select("movie_id")
       .eq("user_id", currentUser.id);
 
+    if (!error) {
+      (data || []).forEach((row) => {
+        favorites.add(String(row.movie_id));
+      });
+    } else {
+      console.warn("Favorit gagal dimuat:", error.message);
+    }
+  }
+
+  renderMovies();
+  renderFavoriteMovies();
+}
+
+async function toggleFavorite(movieId) {
+  if (!currentUser) {
+    notify("Masuk terlebih dahulu untuk menyimpan favorit.");
+    openDialog("loginDialog");
+    return;
+  }
+
+  const id = String(movieId);
+  const exists = favorites.has(id);
+
+  if (exists) {
+    const { error } = await db
+      .from("favorites")
+      .delete()
+      .eq("user_id", currentUser.id)
+      .eq("movie_id", movieId);
+
     if (error) {
-      console.warn("Favorit belum dapat dimuat:", error.message);
-      renderFavorites();
+      notify("Gagal menghapus favorit.");
       return;
     }
 
-    (data || []).forEach((item) => {
-      favorites.add(String(item.movie_id));
+    favorites.delete(id);
+  } else {
+    const { error } = await db
+      .from("favorites")
+      .insert({
+        user_id: currentUser.id,
+        movie_id: movieId
+      });
+
+    if (error) {
+      notify("Gagal menyimpan favorit.");
+      return;
+    }
+
+    favorites.add(id);
+  }
+
+  renderMovies();
+  renderFavoriteMovies();
+}
+
+function renderFavoriteMovies() {
+  const list = movies.filter((m) => favorites.has(String(m.id)));
+
+  $("favoriteGrid").innerHTML = list.length
+    ? list.map((movie) => `
+        <article class="movie-card">
+          <h3>${escapeHTML(movie.title)}</h3>
+          <p class="muted small">${escapeHTML(movie.category || "")}</p>
+          <button class="button button-primary"
+            data-play="${escapeHTML(movie.id)}" type="button">
+            Tonton
+          </button>
+          <button class="button button-ghost"
+            data-favorite="${escapeHTML(movie.id)}" type="button">
+            Hapus favorit
+          </button>
+        </article>
+      `).join("")
+    : '<div class="empty-state">Belum ada film favorit.</div>';
+}
+
+// ==========================================
+// PEMUTAR FILM DAN EPISODE
+// ==========================================
+
+function safeVideoURL(value) {
+  if (!validURL(value || "")) return null;
+
+  const url = new URL(value);
+
+  const allowedHosts = [
+    "youtube.com",
+    "www.youtube.com",
+    "youtu.be",
+    "www.youtube-nocookie.com",
+    "player.vimeo.com",
+    "vimeo.com"
+  ];
+
+  if (allowedHosts.includes(url.hostname)) {
+    if (url.hostname === "youtu.be") {
+      const id = url.pathname.slice(1);
+      return /^[\w-]{11}$/.test(id)
+        ? `https://www.youtube-nocookie.com/embed/${id}`
+        : null;
+    }
+
+    if (url.hostname.includes("youtube")) {
+      const id = url.searchParams.get("v") ||
+        url.pathname.match(/\/embed\/([\w-]{11})/)?.[1];
+
+      return id && /^[\w-]{11}$/.test(id)
+        ? `https://www.youtube-nocookie.com/embed/${id}`
+        : null;
+    }
+
+    return url.hostname === "player.vimeo.com"
+      ? url.href
+      : null;
+  }
+
+  // Tautan video langsung hanya jika berupa MP4/WebM.
+  if (/\.(mp4|webm|ogg)$/i.test(url.pathname)) {
+    return url.href;
+  }
+
+  return null;
+}
+
+async function playMovie(movieId) {
+  currentMovie = movies.find((m) => String(m.id) === String(movieId));
+  if (!currentMovie) return;
+
+  $("playerTitle").textContent = currentMovie.title;
+  $("playerDescription").textContent = currentMovie.description || "";
+
+  renderVideo(currentMovie.video_url);
+  openDialog("playerDialog");
+  await loadEpisodes(currentMovie.id);
+}
+
+function renderVideo(videoURL) {
+  const frame = $("playerFrame");
+  frame.replaceChildren();
+
+  const safeURL = safeVideoURL(videoURL);
+
+  if (!safeURL) {
+    frame.textContent =
+      "Tautan video tidak didukung. Gunakan URL YouTube, Vimeo, MP4, atau WebM yang sah.";
+    return;
+  }
+
+  if (/\.(mp4|webm|ogg)(\?.*)?$/i.test(safeURL)) {
+    const video = document.createElement("video");
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = safeURL;
+    video.style.width = "100%";
+    frame.appendChild(video);
+  } else {
+    const iframe = document.createElement("iframe");
+    iframe.src = safeURL;
+    iframe.title = "Pemutar video LOOKSATSU";
+    iframe.allow =
+      "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+    iframe.allowFullscreen = true;
+    iframe.referrerPolicy = "strict-origin-when-cross-origin";
+    frame.appendChild(iframe);
+  }
+}
+
+async function loadEpisodes(movieId) {
+  const { data, error } = await db
+    .from("episodes")
+    .select("*")
+    .eq("movie_id", movieId)
+    .order("episode_number", { ascending: true });
+
+  if (error) {
+    $("episodeList").textContent = "Gagal memuat episode.";
+    return;
+  }
+
+  episodes = data || [];
+
+  $("episodeList").innerHTML = episodes.length
+    ? episodes.map((ep) => `
+        <button type="button" class="admin-row"
+          data-episode="${escapeHTML(ep.id)}">
+          <strong>Episode ${escapeHTML(ep.episode_number)}</strong>
+          <span>${escapeHTML(ep.title)}</span>
+        </button>
+      `).join("")
+    : '<div class="empty-state">Belum ada episode.</div>';
+}
+
+$("playerClose").addEventListener("click", () => {
+  $("playerFrame").replaceChildren();
+  closeDialog("playerDialog");
+});
+
+$("episodeList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-episode]");
+  if (!button) return;
+
+  const episode = episodes.find(
+    (ep) => String(ep.id) === button.dataset.episode
+  );
+
+  if (!episode) return;
+
+  $("playerTitle").textContent =
+    `${currentMovie?.title || "Film"} — ${episode.title}`;
+
+  renderVideo(episode.video_url);
+});
+
+// ==========================================
+// EVENT KATALOG
+// ==========================================
+
+document.addEventListener("click", (event) => {
+  const playButton = event.target.closest("[data-play]");
+  const favoriteButton = event.target.closest("[data-favorite]");
+
+  if (playButton) playMovie(playButton.dataset.play);
+  if (favoriteButton) toggleFavorite(favoriteButton.dataset.favorite);
+});
+
+// ==========================================
+// TAB ADMIN
+// ==========================================
+
+document.querySelectorAll("[data-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!isAdmin) return;
+
+    document.querySelectorAll("[data-tab]").forEach((tab) => {
+      tab.classList.toggle("active", tab === button);
     });
 
-    renderFavorites();
-    renderMovies();
+    document.querySelectorAll(".tab-content").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.id !== button.dataset.tab);
+    });
+  });
+});
+
+// ==========================================
+// FORM FILM ADMIN
+// ==========================================
+
+function resetMovieForm() {
+  $("movieForm").reset();
+  $("movieId").value = "";
+  $("movieCategory").value = "Tokusatsu";
+  $("movieFormTitle").textContent = "Tambah film";
+}
+
+$("cancelEdit").addEventListener("click", resetMovieForm);
+
+$("movieForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!isAdmin) return notify("Akses admin diperlukan.");
+
+  const id = $("movieId").value;
+  const title = $("movieTitle").value.trim();
+  const video = $("movieVideo").value.trim();
+  const poster = $("moviePoster").value.trim();
+
+  if (!validURL(video) || (poster && !validURL(poster))) {
+    return showMessage("adminMessage", "URL tidak valid.");
   }
 
-  async function toggleFavorite(movieId) {
-    if (!currentUser || !sb) {
-      toast("Login terlebih dahulu untuk menyimpan favorit.");
-      return;
-    }
+  const payload = {
+    title,
+    category: $("movieCategory").value.trim() || "Tokusatsu",
+    year: $("movieYear").value ? Number($("movieYear").value) : null,
+    poster_url: poster || null,
+    video_url: video,
+    description: $("movieDescription").value.trim()
+  };
 
-    const id = String(movieId);
+  const query = id
+    ? db.from("movies").update(payload).eq("id", id)
+    : db.from("movies").insert(payload);
 
-    if (favorites.has(id)) {
-      const { error } = await sb
-        .from("favorites")
-        .delete()
-        .eq("user_id", currentUser.id)
-        .eq("movie_id", movieId);
+  const { error } = await query;
 
-      if (error) {
-        toast("Gagal menghapus favorit.");
-        return;
-      }
-
-      favorites.delete(id);
-    } else {
-      const { error } = await sb
-        .from("favorites")
-        .insert({
-          user_id: currentUser.id,
-          movie_id: movieId
-        });
-
-      if (error) {
-        toast("Gagal menambah favorit.");
-        return;
-      }
-
-      favorites.add(id);
-    }
-
-    renderMovies();
-    renderFavorites();
+  if (error) {
+    showMessage("adminMessage", "Gagal: " + error.message);
+    return;
   }
 
-  function renderFavorites() {
-    const grid = $("favoriteGrid");
-    if (!grid) return;
+  resetMovieForm();
+  showMessage("adminMessage", "Film berhasil disimpan.");
+  await loadMovies();
+  notify("Katalog diperbarui.");
+});
 
-    const list = movies.filter((movie) =>
-      favorites.has(String(movie.id))
-    );
-
-    grid.innerHTML = list.length
-      ? list.map((movie) => `
-          <article class="movie-card">
-            <img src="${escapeHTML(movie.poster_url || "")}"
-              alt="${escapeHTML(movie.title)}">
-            <h3>${escapeHTML(movie.title)}</h3>
-            <button type="button"
-              data-action="watch"
-              data-id="${escapeHTML(movie.id)}">
-              Lihat Episode
-            </button>
-          </article>
-        `).join("")
-      : "<p>Belum ada film favorit.</p>";
-  }
-
-  // =========================
-  // EPISODE DAN PEMUTAR
-  // =========================
-
-  async function openMovie(movieId) {
-    if (!sb) {
-      toast("Supabase belum terhubung.");
-      return;
-    }
-
-    currentMovie = movies.find(
-      (movie) => String(movie.id) === String(movieId)
-    );
-
-    if (!currentMovie) {
-      toast("Film tidak ditemukan.");
-      return;
-    }
-
-    const { data, error } = await sb
-      .from("episodes")
-      .select("*")
-      .eq("movie_id", movieId)
-      .order("episode_number", { ascending: true });
-
-    if (error) {
-      toast("Gagal memuat episode. Periksa tabel episodes.");
-      console.error(error);
-      return;
-    }
-
-    currentEpisodes = data || [];
-
-    if ($("playerTitle")) {
-      $("playerTitle").textContent = currentMovie.title;
-    }
-
-    if ($("playerDescription")) {
-      $("playerDescription").textContent =
-        currentMovie.description || "";
-    }
-
-    renderEpisodes();
-    $("playerDialog")?.showModal();
-  }
-
-  function renderEpisodes() {
-    const list = $("episodeList");
-    if (!list) return;
-
-    list.innerHTML = currentEpisodes.length
-      ? currentEpisodes.map((episode, index) => `
-          <button type="button"
-            data-action="episode"
-            data-index="${index}">
-            Episode ${escapeHTML(episode.episode_number)}:
-            ${escapeHTML(episode.title || "")}
+function renderAdminMovies() {
+  $("adminMovieList").innerHTML = movies.length
+    ? movies.map((movie) => `
+        <div class="admin-row">
+          <div>
+            <strong>${escapeHTML(movie.title)}</strong>
+            <p class="muted small">${escapeHTML(movie.category || "")}</p>
+          </div>
+          <button class="button button-ghost"
+            type="button" data-edit-movie="${escapeHTML(movie.id)}">
+            Edit
           </button>
-        `).join("")
-      : "<p>Belum ada episode untuk film ini.</p>";
-  }
+          <button class="button button-ghost"
+            type="button" data-delete-movie="${escapeHTML(movie.id)}">
+            Hapus
+          </button>
+        </div>
+      `).join("")
+    : '<div class="empty-state">Belum ada film.</div>';
 
-  function playEpisode(index) {
-    if (index < 0 || index >= currentEpisodes.length) return;
+  populateMovieSelect();
+}
 
-    const episode = currentEpisodes[index];
-    const url = episode.video_url;
+$("adminMovieList").addEventListener("click", async (event) => {
+  const edit = event.target.closest("[data-edit-movie]");
+  const remove = event.target.closest("[data-delete-movie]");
 
-    if (!url) {
-      toast("URL video episode belum diisi.");
-      return;
-    }
+  if (!isAdmin) return;
 
-    let parsed;
+  if (edit) {
+    const movie = movies.find(
+      (m) => String(m.id) === edit.dataset.editMovie
+    );
 
-    try {
-      parsed = new URL(url);
-    } catch {
-      toast("URL video tidak valid.");
-      return;
-    }
-
-    if (!["https:", "http:"].includes(parsed.protocol)) {
-      toast("Protokol URL video tidak diizinkan.");
-      return;
-    }
-
-    const frame = $("playerFrame");
-    if (frame) {
-      frame.src = parsed.href;
-      frame.title = episode.title || "Pemutar episode";
-    }
-
-    if ($("playerTitle")) {
-      $("playerTitle").textContent =
-        `${currentMovie?.title || "Film"} — Episode ${episode.episode_number}`;
-    }
-  }
-
-  function closePlayer() {
-    const frame = $("playerFrame");
-    if (frame) frame.src = "about:blank";
-
-    $("playerDialog")?.close();
-  }
-
-  // =========================
-  // ADMIN: FILM
-  // =========================
-
-  async function saveMovie(event) {
-    event.preventDefault();
-
-    if (!isAdmin || !sb) {
-      toast("Akses admin diperlukan.");
-      return;
-    }
-
-    const id = $("movieId")?.value;
-    const payload = {
-      title: $("movieTitle")?.value.trim(),
-      category: $("movieCategory")?.value,
-      year: Number($("movieYear")?.value) || null,
-      poster_url: $("moviePoster")?.value.trim() || null,
-      video_url: $("movieVideo")?.value.trim() || null,
-      description: $("movieDescription")?.value.trim() || ""
-    };
-
-    if (!payload.title) {
-      setMessage("adminMessage", "Judul film wajib diisi.");
-      return;
-    }
-
-    const query = id
-      ? sb.from("movies").update(payload).eq("id", id)
-      : sb.from("movies").insert(payload);
-
-    const { error } = await query;
-
-    if (error) {
-      setMessage("adminMessage", "Gagal menyimpan: " + error.message);
-      return;
-    }
-
-    $("movieForm")?.reset();
-    if ($("movieId")) $("movieId").value = "";
-    setMessage("adminMessage", "Film berhasil disimpan.");
-
-    await loadMovies();
-    await renderAdminMovies();
-  }
-
-  async function deleteMovie(id) {
-    if (!isAdmin || !sb) return;
-
-    if (!confirm("Hapus film ini?")) return;
-
-    const { error } = await sb
-      .from("movies")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
-      toast("Gagal menghapus film: " + error.message);
-      return;
-    }
-
-    toast("Film dihapus.");
-    await loadMovies();
-    await renderAdminMovies();
-  }
-
-  async function renderAdminMovies() {
-    const list = $("adminMovieList");
-    if (!list || !sb || !isAdmin) return;
-
-    const { data, error } = await sb
-      .from("movies")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      list.textContent = "Gagal memuat daftar film.";
-      return;
-    }
-
-    list.innerHTML = (data || []).map((movie) => `
-      <div class="admin-item">
-        <span>${escapeHTML(movie.title)}</span>
-        <button type="button" data-action="edit-movie"
-          data-id="${escapeHTML(movie.id)}">Edit</button>
-        <button type="button" data-action="delete-movie"
-          data-id="${escapeHTML(movie.id)}">Hapus</button>
-      </div>
-    `).join("") || "<p>Belum ada film.</p>";
-  }
-
-  function editMovie(id) {
-    const movie = movies.find((item) => String(item.id) === String(id));
     if (!movie) return;
 
     $("movieId").value = movie.id;
     $("movieTitle").value = movie.title || "";
-    $("movieCategory").value = movie.category || "";
+    $("movieCategory").value = movie.category || "Tokusatsu";
     $("movieYear").value = movie.year || "";
     $("moviePoster").value = movie.poster_url || "";
     $("movieVideo").value = movie.video_url || "";
     $("movieDescription").value = movie.description || "";
+    $("movieFormTitle").textContent = "Edit film";
 
-    if ($("movieFormTitle")) {
-      $("movieFormTitle").textContent = "Edit Film";
-    }
+    $("movieForm").scrollIntoView({ behavior: "smooth" });
   }
 
-  // =========================
-  // ADMIN: EPISODE
-  // =========================
+  if (remove && confirm("Hapus film ini beserta episode terkait?")) {
+    const { error } = await db.from("movies")
+      .delete().eq("id", remove.dataset.deleteMovie);
 
-  async function saveEpisode(event) {
-    event.preventDefault();
+    if (error) return notify("Gagal menghapus film: " + error.message);
 
-    if (!isAdmin || !sb) {
-      toast("Akses admin diperlukan.");
-      return;
-    }
+    await loadMovies();
+    notify("Film dihapus jika diizinkan oleh database.");
+  }
+});
 
-    const id = $("episodeId")?.value;
-    const movieId = $("episodeMovieId")?.value;
-    const episodeNumber = Number($("episodeNumber")?.value);
-    const title = $("episodeTitle")?.value.trim();
-    const videoUrl = $("episodeVideo")?.value.trim();
+function populateMovieSelect() {
+  const select = $("episodeMovieId");
+  const previous = select.value;
 
-    if (!movieId || !episodeNumber || !videoUrl) {
-      setMessage("episodeMessage", "Film, nomor episode, dan URL wajib diisi.");
-      return;
-    }
+  select.innerHTML =
+    '<option value="">Pilih film terlebih dahulu</option>' +
+    movies.map((m) =>
+      `<option value="${escapeHTML(m.id)}">${escapeHTML(m.title)}</option>`
+    ).join("");
 
-    const payload = {
-      movie_id: movieId,
-      episode_number: episodeNumber,
-      title: title || `Episode ${episodeNumber}`,
-      video_url: videoUrl
-    };
+  if (movies.some((m) => String(m.id) === previous)) {
+    select.value = previous;
+  }
+}
 
-    const query = id
-      ? sb.from("episodes").update(payload).eq("id", id)
-      : sb.from("episodes").insert(payload);
+// ==========================================
+// FORM EPISODE ADMIN
+// ==========================================
 
-    const { error } = await query;
+function resetEpisodeForm() {
+  $("episodeForm").reset();
+  $("episodeId").value = "";
+  $("episodeFormTitle").textContent = "Tambah episode";
+}
 
-    if (error) {
-      setMessage("episodeMessage", "Gagal menyimpan: " + error.message);
-      return;
-    }
+$("cancelEpisodeEdit").addEventListener("click", resetEpisodeForm);
 
-    $("episodeForm")?.reset();
-    if ($("episodeId")) $("episodeId").value = "";
-    setMessage("episodeMessage", "Episode berhasil disimpan.");
-    await renderAdminEpisodes();
+$("episodeForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!isAdmin) return notify("Akses admin diperlukan.");
+
+  const id = $("episodeId").value;
+  const video = $("episodeVideo").value.trim();
+
+  if (!validURL(video)) {
+    return showMessage("episodeMessage", "URL video tidak valid.");
   }
 
-  async function renderAdminEpisodes() {
-    const list = $("adminEpisodeList");
-    if (!list || !sb || !isAdmin) return;
+  const payload = {
+    movie_id: $("episodeMovieId").value,
+    episode_number: Number($("episodeNumber").value),
+    title: $("episodeTitle").value.trim(),
+    video_url: video
+  };
 
-    const { data, error } = await sb
-      .from("episodes")
-      .select("id, movie_id, episode_number, title")
-      .order("episode_number", { ascending: true });
+  const query = id
+    ? db.from("episodes").update(payload).eq("id", id)
+    : db.from("episodes").insert(payload);
 
-    if (error) {
-      list.textContent = "Gagal memuat episode.";
-      return;
-    }
+  const { error } = await query;
 
-    list.innerHTML = (data || []).map((episode) => `
-      <div class="admin-item">
-        <span>${escapeHTML(episode.title)} (#${escapeHTML(episode.episode_number)})</span>
-        <button type="button" data-action="delete-episode"
-          data-id="${escapeHTML(episode.id)}">Hapus</button>
+  if (error) {
+    showMessage("episodeMessage", "Gagal: " + error.message);
+    return;
+  }
+
+  resetEpisodeForm();
+  showMessage("episodeMessage", "Episode berhasil disimpan.");
+  
+  await loadAdminEpisodes();
+  notify("Daftar episode diperbarui.");
+});
+
+// ==========================================
+// MEMUAT DAFTAR EPISODE UNTUK ADMIN
+// ==========================================
+
+async function loadAdminEpisodes() {
+  const { data, error } = await db
+    .from("episodes")
+    .select("*, movies(title)")
+    .order("movie_id")
+    .order("episode_number");
+
+  if (error) {
+    $("adminEpisodeList").textContent = "Gagal memuat episode.";
+    console.error(error);
+    return;
+  }
+
+  $("adminEpisodeList").innerHTML = (data || []).map((ep) => `
+    <div class="admin-row">
+      <div>
+        <strong>${escapeHTML(ep.movies?.title || "Film")}</strong>
+        <p>Episode ${escapeHTML(ep.episode_number)} — ${escapeHTML(ep.title)}</p>
       </div>
-    `).join("") || "<p>Belum ada episode.</p>";
+      <button type="button" class="button button-ghost"
+        data-edit-episode="${escapeHTML(ep.id)}">Edit</button>
+      <button type="button" class="button button-ghost"
+        data-delete-episode="${escapeHTML(ep.id)}">Hapus</button>
+    </div>
+  `).join("") || '<div class="empty-state">Belum ada episode.</div>';
+}
+
+$("adminEpisodeList").addEventListener("click", async (event) => {
+  if (!isAdmin) return;
+
+  const edit = event.target.closest("[data-edit-episode]");
+  const remove = event.target.closest("[data-delete-episode]");
+
+  if (edit) {
+    const { data, error } = await db
+      .from("episodes")
+      .select("*")
+      .eq("id", edit.dataset.editEpisode)
+      .single();
+
+    if (error || !data) {
+      notify("Episode tidak ditemukan.");
+      return;
+    }
+
+    $("episodeId").value = data.id;
+    $("episodeMovieId").value = data.movie_id;
+    $("episodeNumber").value = data.episode_number;
+    $("episodeTitle").value = data.title;
+    $("episodeVideo").value = data.video_url;
+    $("episodeFormTitle").textContent = "Edit episode";
+
+    $("episodeForm").scrollIntoView({ behavior: "smooth" });
   }
 
-  async function deleteEpisode(id) {
-    if (!isAdmin || !sb) return;
-    if (!confirm("Hapus episode ini?")) return;
-
-    const { error } = await sb
+  if (remove && confirm("Yakin ingin menghapus episode ini?")) {
+    const { error } = await db
       .from("episodes")
       .delete()
-      .eq("id", id);
+      .eq("id", remove.dataset.deleteEpisode);
 
     if (error) {
-      toast("Gagal menghapus episode.");
+      notify("Gagal menghapus episode.");
       return;
     }
 
-    toast("Episode dihapus.");
-    await renderAdminEpisodes();
+    await loadAdminEpisodes();
+
+    if (currentMovie) {
+      await loadEpisodes(currentMovie.id);
+    }
+
+    notify("Episode berhasil dihapus.");
+  }
+});
+
+// ==========================================
+// PENGUMUMAN
+// ==========================================
+
+async function loadAnnouncement() {
+  const { data, error } = await db
+    .from("announcements")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.error("Pengumuman gagal dimuat:", error);
+    return;
   }
 
-  // =========================
-  // ADMIN: PENGUMUMAN
-  // =========================
+  announcement = data?.[0] || null;
 
-  async function saveAnnouncement(event) {
-    event.preventDefault();
+  if (announcement) {
+    $("announcementTitle").value = announcement.title || "";
+    $("announcementText").value = announcement.content || "";
+    $("announcementHide").checked = !!announcement.is_hidden;
 
-    if (!isAdmin || !sb) {
-      toast("Akses admin diperlukan.");
-      return;
-    }
+    $("announcementDisplayTitle").textContent = announcement.title;
+    $("announcementDisplayText").textContent = announcement.content;
+  }
+}
 
-    const payload = {
-      title: $("announcementTitle")?.value.trim(),
-      message: $("announcementText")?.value.trim(),
-      is_hidden: !!$("announcementHide")?.checked
-    };
-
-    if (!payload.title || !payload.message) {
-      setMessage("announcementMessage", "Judul dan isi wajib diisi.");
-      return;
-    }
-
-    const { error } = await sb
-      .from("announcements")
-      .insert(payload);
-
-    if (error) {
-      setMessage("announcementMessage", "Gagal menyimpan pengumuman: " + error.message);
-      return;
-    }
-
-    $("announcementForm")?.reset();
-    setMessage("announcementMessage", "Pengumuman berhasil dibuat.");
-    await loadAnnouncement();
+function showAnnouncement() {
+  if (!announcement || announcement.is_hidden) {
+    $("announcementDisplayTitle").textContent = "Pengumuman";
+    $("announcementDisplayText").textContent =
+      "Belum ada pengumuman aktif.";
+  } else {
+    $("announcementDisplayTitle").textContent = announcement.title;
+    $("announcementDisplayText").textContent = announcement.content;
   }
 
-  async function loadAnnouncement() {
-    if (!sb) return;
+  openDialog("announcementDialog");
+}
 
-    const { data, error } = await sb
-      .from("announcements")
-      .select("*")
-      .eq("is_hidden", false)
-      .order("created_at", { ascending: false })
-      .limit(1);
+$("announcementOpen").addEventListener("click", showAnnouncement);
 
-    if (error || !data?.length) return;
+$("announcementClose").addEventListener("click", () => {
+  closeDialog("announcementDialog");
+});
 
-    const announcement = data[0];
+$("announcementOk").addEventListener("click", () => {
+  closeDialog("announcementDialog");
+});
 
-    if ($("announcementDisplayTitle")) {
-      $("announcementDisplayTitle").textContent = announcement.title;
-    }
+$("announcementPreview").addEventListener("click", () => {
+  $("announcementDisplayTitle").textContent =
+    $("announcementTitle").value || "Pengumuman";
 
-    if ($("announcementDisplayText")) {
-      $("announcementDisplayText").textContent = announcement.message;
-    }
+  $("announcementDisplayText").textContent =
+    $("announcementText").value || "Belum ada isi pengumuman.";
 
-    $("announcementDialog")?.showModal();
+  openDialog("announcementDialog");
+});
+
+$("announcementForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  if (!isAdmin) {
+    notify("Akses admin diperlukan.");
+    return;
   }
 
-  // =========================
-  // ADMIN: CARI PENGGUNA
-  // =========================
+  const payload = {
+    title: $("announcementTitle").value.trim(),
+    content: $("announcementText").value.trim(),
+    is_hidden: $("announcementHide").checked,
+    updated_at: new Date().toISOString()
+  };
 
-  async function searchUsers(event) {
-    event.preventDefault();
+  const query = announcement
+    ? db.from("announcements").update(payload)
+        .eq("id", announcement.id)
+    : db.from("announcements").insert(payload);
 
-    if (!isAdmin || !sb) {
-      toast("Akses admin diperlukan.");
-      return;
-    }
+  const { error } = await query;
 
-    const query = $("userSearch")?.value.trim();
-    const results = $("userResults");
-
-    if (!results) return;
-    if (!query) {
-      results.textContent = "Masukkan ID pengguna untuk mencari profil.";
-      return;
-    }
-
-    // Tidak mengambil email atau data sensitif pengguna.
-    const { data, error } = await sb
-      .from("profiles")
-      .select("id, display_name, role")
-      .eq("id", query)
-      .limit(1);
-
-    if (error) {
-      results.textContent = "Pencarian gagal. Periksa izin tabel profiles.";
-      return;
-    }
-
-    results.innerHTML = data?.length
-      ? data.map((user) => `
-          <p>Nama: ${escapeHTML(user.display_name || "Pengguna")}
-          — Peran: ${escapeHTML(user.role || "user")}</p>
-        `).join("")
-      : "Profil tidak ditemukan.";
+  if (error) {
+    showMessage("announcementMessage", "Gagal menyimpan pengumuman.");
+    console.error(error);
+    return;
   }
 
-  // =========================
-  // EVENT LISTENER
-  // =========================
+  await loadAnnouncement();
+  showMessage("announcementMessage", "Pengumuman berhasil disimpan.");
+  notify("Pengumuman diperbarui.");
+});
 
-  $("loginForm")?.addEventListener("submit", authSubmit);
+// ==========================================
+// PENCARIAN PENGGUNA
+// ==========================================
 
-  $("loginOpen")?.addEventListener("click", () => {
-    if (!sb) {
-      toast("Supabase belum terhubung. Periksa config.js.");
-    }
-     
-      $("loginDialog")?.showModal();
-    });
+$("userSearchForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
 
-  $("loginClose")?.addEventListener("click", () => {
-    $("loginDialog")?.close();
-  });
-
-  $("authToggle")?.addEventListener("click", () => {
-    setAuthMode(!signupMode);
-  });
-
-  $("logoutBtn")?.addEventListener("click", logout);
-
-  $("searchInput")?.addEventListener("input", renderMovies);
-  $("categoryFilter")?.addEventListener("change", renderMovies);
-
-  $("movieGrid")?.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) return;
-
-    const id = button.dataset.id;
-
-    if (button.dataset.action === "watch") {
-      openMovie(id);
-    }
-
-    if (button.dataset.action === "favorite") {
-      toggleFavorite(id);
-    }
-  });
-
-  $("favoriteGrid")?.addEventListener("click", (event) => {
-    const button = event.target.closest(
-      'button[data-action="watch"]'
-    );
-
-    if (button) openMovie(button.dataset.id);
-  });
-
-  $("episodeList")?.addEventListener("click", (event) => {
-    const button = event.target.closest(
-      'button[data-action="episode"]'
-    );
-
-    if (button) {
-      playEpisode(Number(button.dataset.index));
-    }
-  });
-
-  $("playerClose")?.addEventListener("click", closePlayer);
-
-  $("movieForm")?.addEventListener("submit", saveMovie);
-  $("episodeForm")?.addEventListener("submit", saveEpisode);
-  $("announcementForm")?.addEventListener(
-    "submit",
-    saveAnnouncement
-  );
-  $("userSearchForm")?.addEventListener(
-    "submit",
-    searchUsers
-  );
-
-  $("cancelEdit")?.addEventListener("click", () => {
-    $("movieForm")?.reset();
-    if ($("movieId")) $("movieId").value = "";
-  });
-
-  $("cancelEpisodeEdit")?.addEventListener("click", () => {
-    $("episodeForm")?.reset();
-    if ($("episodeId")) $("episodeId").value = "";
-  });
-
-  $("adminMovieList")?.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) return;
-
-    if (button.dataset.action === "edit-movie") {
-      editMovie(button.dataset.id);
-    }
-
-    if (button.dataset.action === "delete-movie") {
-      deleteMovie(button.dataset.id);
-    }
-  });
-
-  $("adminEpisodeList")?.addEventListener("click", (event) => {
-    const button = event.target.closest(
-      'button[data-action="delete-episode"]'
-    );
-
-    if (button) deleteEpisode(button.dataset.id);
-  });
-
-  $("announcementClose")?.addEventListener("click", () => {
-    $("announcementDialog")?.close();
-  });
-
-  $("announcementOk")?.addEventListener("click", () => {
-    $("announcementDialog")?.close();
-  });
-
-  // =========================
-  // MULAI APLIKASI
-  // =========================
-
-  async function init() {
-    const year = $("yearNow");
-
-    if (year) {
-      year.textContent = new Date().getFullYear();
-    }
-
-    setAuthMode(false);
-
-    if (!sb) {
-      setStatus("Supabase belum terkonfigurasi.");
-      renderMovies();
-      return;
-    }
-
-    const { data, error } = await sb.auth.getSession();
-
-    if (error) {
-      console.error("Gagal membaca sesi:", error);
-    }
-
-    await refreshAuth(data?.session || null);
-    await loadAnnouncement();
-    await renderAdminMovies();
-    await renderAdminEpisodes();
-
-    sb.auth.onAuthStateChange((_event, session) => {
-      setTimeout(() => {
-        refreshAuth(session);
-      }, 0);
-    });
+  if (!isAdmin) {
+    notify("Akses admin diperlukan.");
+    return;
   }
 
-  init().catch((error) => {
-    console.error("LOOKSATSU gagal dimulai:", error);
-    setStatus("Aplikasi gagal dimulai. Periksa Console.");
-  });
+  const term = $("userSearch").value.trim();
 
-})();
- 
+  if (term.length < 2) {
+    $("userResults").textContent =
+      "Masukkan minimal 2 karakter.";
+    return;
+  }
+
+  // Karakter khusus dibuang untuk menghindari
+  // kesalahan format filter PostgREST.
+  const safeTerm = term.replace(/[%_,().]/g, " ");
+
+  const { data, error } = await db
+    .from("profiles")
+    .select("id, display_name, username")
+    .or(
+      `display_name.ilike.%${safeTerm}%,username.ilike.%${safeTerm}%`
+    )
+    .limit(20);
+
+  if (error) {
+    $("userResults").textContent =
+      "Pencarian gagal. Periksa izin tabel profiles.";
+    console.error(error);
+    return;
+  }
+
+  $("userResults").innerHTML = (data || []).map((user) => `
+    <div class="admin-row">
+      <div>
+        <strong>${escapeHTML(user.display_name || "Pengguna")}</strong>
+        <p class="muted small">${escapeHTML(user.username || "")}</p>
+      </div>
+    </div>
+  `).join("") || '<div class="empty-state">Pengguna tidak ditemukan.</div>';
+});
+
+// ==========================================
+// INISIALISASI WEBSITE
+// ==========================================
+
+async function init() {
+  $("yearNow").textContent = new Date().getFullYear();
+
+  if (!window.supabase ||
+      typeof SUPABASE_URL === "undefined" ||
+      typeof SUPABASE_ANON_KEY === "undefined") {
+    setConnection("Konfigurasi Supabase belum tersedia.");
+    return;
+  }
+
+  try {
+    await refreshAccount();
+
+    await Promise.all([
+      loadMovies(),
+      loadAnnouncement(),
+      loadAdminEpisodes()
+    ]);
+  } catch (error) {
+    console.error("Gagal memulai LOOKSATSU:", error);
+    setConnection("Gagal memuat website. Periksa koneksi dan konfigurasi.");
+  }
+}
+
+init();
+    
